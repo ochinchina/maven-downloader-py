@@ -122,14 +122,15 @@ class MavenPom:
         self._all_poms = []
         #get the the poms
         while len( parents ) > 0:
-            parent = parents.pop()
-            pom_info = self._download_pom( parent )
+            cur_lib = parents.pop()
+            pom_info = self._download_pom( cur_lib )
             if pom_info:
-                self._lib_base_url[parent] = pom_info['base_url']
+                self._lib_base_url[cur_lib] = pom_info['base_url']
                 root = ET.fromstring(pom_info['content'])
                 self._all_poms.append( root )
                 xmlns = self._extract_xmlns( root.tag )
                 self._extract_properties( root, xmlns )
+                self._extract_module_dependencies( cur_lib, root, xmlns )
                 parent = self._extract_parent( root, xmlns )
                 if parent is not None:
                     parents.append( parent )
@@ -185,6 +186,18 @@ class MavenPom:
                 artifactId = self._eval_with_properties( dep['artifactId'] )
                 result.append( MavenLib( groupId, artifactId, version ) )
         return result 
+
+    def _extract_module_dependencies( self, mavenLib, root, xmlns ):
+        if mavenLib.artifactId.endswith( '-parent' ):
+            artifactId = mavenLib.artifactId[0:-1*len('-parent')]
+        else:
+            artifactId = mavenLib.artifactId
+        modules_elem = root.find( '%smodules' % xmlns )
+        if modules_elem is not None:
+            for module_elem in modules_elem.iter( '%smodule' % xmlns ):
+                self._dependencies.append( {'groupId':mavenLib.groupId, 
+                        'artifactId':'%s-%s' % (artifactId, module_elem.text), 
+                        'version':mavenLib.version} )
 
     def _get_version_from_dependency_management( self, groupId, artifactId ):
         for dep in self._dependency_management:
@@ -253,20 +266,30 @@ class MavenPom:
                 dep['scope'] = scope.text
             if version is not None:
                 dep['version'] = self._eval_with_properties( version.text )
-            if self._dependency_exist( dep ):
-                return None
+            #if self._dependency_exist( dep ):
+            #    return None
             return dep
         return None
 
     def _dependency_exist( self, dep ):
         for d in self._dependencies:
             if d['groupId'] == dep['groupId'] and d['artifactId'] == dep['artifactId']:
-                if d['version'] == dep['version']:
+                if 'version' in d and 'version' in dep and d['version'] == dep['version']:
                     return True
                 print( TextColor.yellow("Warning: different version %s and %s for same library %s:%s" % ( d['version'], dep['version'], d['groupId'], d['artifactId'] ) ) )
                 return False
         return False
     def _extract_parent( self, root, xmlns ):
+        """
+        extract the parent information
+
+        Args:
+            root(xml.etree.ElementTree): the pom xml document
+            xmlns: the xml namespace
+
+        Returns:
+            a parent(MavenLib instance)
+        """
         parent_elem = root.find( '%sparent' % xmlns )
         if parent_elem is not None:
             groupId = parent_elem.find( '%sgroupId' % xmlns )
@@ -335,11 +358,11 @@ class MavenLibraryDownloader:
         url = "/".join( [base_url, jar_path ] )
         try:
             r = requests.get(url, stream=True)
-            print TextColor.green( "Download %s from %s and save to %s/%s" % ( file_name, url, self._out_dir, file_name ) )
+            print TextColor.green( "Download %s to %s/%s" % ( url, self._out_dir, file_name ) )
             with open(self._out_dir + '/' + file_name, 'wb') as f:
                 shutil.copyfileobj( r.raw, f )
         except Exception as e:
-            pass
+            print(e)
 
         
 def parse_arg():
